@@ -1,0 +1,13 @@
+{
+  "name": "@engine9/pii-classifier",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "description": "Source-agnostic PII classifier. Classification only; sampling stays with the caller.",
+  "exports": {
+    ".": "./src/index.ts"
+  },
+  "engines": {
+    "node": ">=22"
+  }
+}
