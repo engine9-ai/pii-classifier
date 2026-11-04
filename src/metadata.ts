@@ -19,6 +19,19 @@ export interface Hint {
 
 const TYPES = Object.keys(STRONG_ALIASES) as PiiType[];
 
+/**
+ * Types a number cannot hold. A numeric column named email_open_count or
+ * email_delivered is a metric, not an email. Phone, postal code, SSN, card,
+ * birth date and person ids can be stored as numbers, so they keep their hints.
+ */
+const TEXT_ONLY_TYPES = new Set<PiiType>(['EMAIL', 'PERSON_NAME', 'STREET_ADDRESS', 'IP_ADDRESS', 'IBAN']);
+
+export function isNumericDeclaredType(declaredType: string | undefined): boolean {
+  return /^\s*(tinyint|smallint|mediumint|int|integer|bigint|decimal|numeric|float|double|real|number|bit)\b/i.test(
+    String(declaredType || '')
+  );
+}
+
 export interface FieldMeta {
   hints: Hint[];
   freeTextName: boolean;
@@ -48,8 +61,10 @@ export function fieldMetadata(field: PreparedField, context: DatasetContext): Fi
     contextTokens.has('invoice');
 
   const hints: Hint[] = [];
+  const numeric = isNumericDeclaredType(field.declaredType);
   if (!hashColumn) {
     for (const type of TYPES) {
+      if (numeric && TEXT_ONLY_TYPES.has(type)) continue;
       const hint = hintForType(type, field, {
         personContext,
         addressParent,
@@ -102,11 +117,15 @@ function hintForType(
     return { type, weight: 'negative', reason: 'META_NEGATIVE_PAYMENT_CARD' };
   }
 
-  if (matchesAlias(field.leaf, STRONG_ALIASES[type]) || tokenAlias(field.tokens, STRONG_ALIASES[type])) {
+  if (matchesAlias(field.leaf, STRONG_ALIASES[type]) || matchesAlias(headLeaf(field.leaf), STRONG_ALIASES[type])) {
     if (type === 'PERSON_LINKED_ID') {
       return { type, weight: 'strong', reason: 'META_PERSON_KEY' };
     }
     return { type, weight: 'strong', reason: `META_STRONG_${type}` };
+  }
+  // An alias that only modifies the name (email_open_count, email_type) is not what the column holds.
+  if (tokenAlias(field.tokens, STRONG_ALIASES[type])) {
+    return { type, weight: 'weak', reason: `META_WEAK_${type}` };
   }
 
   if (type === 'EMAIL' && field.tokens.includes('mail') && ctx.personContext) {
@@ -137,6 +156,29 @@ function hintForType(
 
 function matchesAlias(leaf: string, aliases: readonly string[]): boolean {
   return aliases.some((alias) => leaf === alias || leaf.endsWith(`_${alias}`));
+}
+
+const TRAILING_QUALIFIERS = new Set([
+  'primary',
+  'secondary',
+  'home',
+  'work',
+  'personal',
+  'business',
+  'alt',
+  'alternate',
+  'other',
+  'main',
+  'preferred'
+]);
+
+/** The leaf without trailing qualifiers and numbers: email_primary and phone_2 hold an email and a phone. */
+function headLeaf(leaf: string): string {
+  const parts = leaf.split('_');
+  while (parts.length > 1 && (TRAILING_QUALIFIERS.has(parts[parts.length - 1]) || /^\d+$/.test(parts[parts.length - 1]))) {
+    parts.pop();
+  }
+  return parts.join('_');
 }
 
 function tokenAlias(tokens: string[], aliases: readonly string[]): boolean {

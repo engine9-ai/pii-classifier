@@ -1,13 +1,22 @@
 import type { DatasetContext, FieldResult, FindingStatus, Hit, PiiType, ResolvedOptions, TypeFinding } from './contracts.ts';
 import type { PreparedField } from './canonicalise.ts';
 import type { FieldMeta, HintWeight } from './metadata.ts';
-import { weightFor } from './metadata.ts';
+import { isNumericDeclaredType, weightFor } from './metadata.ts';
 import type { Profile } from './profile.ts';
 import { tokenizePath } from './canonicalise.ts';
 import { maskValue } from './mask.ts';
 import { STRONG_ALIASES } from './rules/field-aliases.ts';
 
 const DISTINCT_CAP = 4096;
+
+interface FieldContext {
+  siblingContact: boolean;
+  siblingCity: boolean;
+  siblingPostal: boolean;
+  addressParent: boolean;
+  /** A numeric id column with no person-key name: its digits identify a record, not a phone. */
+  idColumn: boolean;
+}
 
 export function aggregateField(
   field: PreparedField,
@@ -25,6 +34,10 @@ export function aggregateField(
   const siblingPostal = siblings.some((leaf) =>
     ['postal_code', 'zip_code', 'postcode', 'zip'].includes(leaf)
   );
+  const idColumn =
+    isNumericDeclaredType(field.declaredType) &&
+    field.leaf.split('_').includes('id') &&
+    !weightFor(meta.hints, 'PERSON_LINKED_ID');
   const types = new Set<PiiType>([
     ...hits.map((hit) => hit.type),
     ...meta.hints.map((hint) => hint.type)
@@ -35,7 +48,8 @@ export function aggregateField(
       siblingContact,
       siblingCity,
       siblingPostal,
-      addressParent: meta.addressParent
+      addressParent: meta.addressParent,
+      idColumn
     }, options);
     if (finding) findings.push(finding);
   }
@@ -69,11 +83,11 @@ function decideType(
   hits: Hit[],
   meta: FieldMeta,
   profile: Profile,
-  siblings: { siblingContact: boolean; siblingCity: boolean; siblingPostal: boolean; addressParent: boolean },
+  siblings: FieldContext,
   options: ResolvedOptions
 ): TypeFinding | null {
   const hint = weightFor(meta.hints, type);
-  const decision = decisionFor(type, hits, hint, siblings);
+  const decision = decisionFor(type, hits, hint, siblings, profile);
   if (!decision) return null;
   const status = lowerIfSynthetic(decision.status, hits);
   const examinedIds = new Set(hits.map((hit) => hit.sampleId));
@@ -124,7 +138,8 @@ function decisionFor(
   type: PiiType,
   hits: Hit[],
   hint: HintWeight | null,
-  siblings: { siblingContact: boolean; siblingCity: boolean; siblingPostal: boolean; addressParent: boolean }
+  siblings: FieldContext,
+  profile: Profile
 ): { status: FindingStatus; reasons: string[] } | null {
   const distinct = new Set(hits.map((hit) => hit.normalised)).size;
   const strongContext = hits.some((hit) => hit.context === 'strong') || hint === 'strong' || hint === 'verified_relation';
@@ -143,6 +158,7 @@ function decisionFor(
     if (!hits.length) return hint ? { status: 'possible', reasons: [metaReason || 'META_PHONE'] } : null;
     if (strongContext) return { status: 'confirmed', reasons: ['PHONE_CONTEXT', ...(metaReason ? [metaReason] : [])] };
     if (distinct >= 2 && weakContext) return { status: 'confirmed', reasons: ['PHONE_REPEATED_WEAK_CONTEXT'] };
+    if (siblings.idColumn) return { status: 'possible', reasons: ['PHONE_ID_COLUMN'] };
     return { status: 'likely', reasons: ['PHONE_FORMAT_ONLY'] };
   }
 
@@ -151,7 +167,10 @@ function decisionFor(
     const syntheticOnly = hits.every((hit) => hit.synthetic);
     if (!syntheticOnly && strongContext) return { status: 'confirmed', reasons: ['CARD_CONTEXT'] };
     if (distinct >= 2 && (strongContext || weakContext)) return { status: 'confirmed', reasons: ['CARD_REPEATED'] };
-    return { status: 'likely', reasons: ['CARD_LUHN_ONLY'] };
+    // About one in ten random digit strings passes Luhn, so a sparse hit in an id column is noise.
+    const rows = new Set(hits.map((hit) => hit.sampleId)).size;
+    if (profile.isFreeText || rows * 2 >= profile.usable) return { status: 'likely', reasons: ['CARD_LUHN_ONLY'] };
+    return { status: 'possible', reasons: ['CARD_LUHN_SPARSE'] };
   }
 
   if (type === 'US_SSN') {
@@ -175,6 +194,10 @@ function decisionFor(
   if (type === 'PERSON_NAME') {
     const labelled = hits.some((hit) => hit.reasons.includes('LABEL_NAME'));
     if (labelled && hits.length) return { status: 'confirmed', reasons: ['LABEL_NAME'] };
+    // One name on every row is a label (the client or sender), not a column of people.
+    if (distinct === 1 && new Set(hits.map((hit) => hit.sampleId)).size >= 10) {
+      return { status: 'possible', reasons: ['PERSON_NAME_CONSTANT'] };
+    }
     if (distinct >= 3 && hint === 'strong' && siblings.siblingContact) {
       return { status: 'confirmed', reasons: ['PERSON_NAME_FIELD_AND_CONTACT'] };
     }

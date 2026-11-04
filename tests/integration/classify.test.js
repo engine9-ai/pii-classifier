@@ -96,6 +96,100 @@ describe('pii classifier', () => {
     assert.equal(card.distinctMatches, 1);
   });
 
+  it('keeps one Luhn pass among numeric ids possible', () => {
+    const ids = [];
+    for (let n = 4000001234560; ids.length < 12; n += 1) {
+      if (!luhn(String(n))) ids.push(String(n));
+    }
+    ids.push(luhnBody('400000123499'));
+    const response = run('members', [
+      { path: 'p2a__external_membership_id__c', declaredType: 'bigint(20)', samples: samples(ids) }
+    ]);
+    const card = finding(response, 'p2a__external_membership_id__c', 'PAYMENT_CARD');
+    assert.equal(card.status, 'possible');
+    assert.ok(card.reasons.includes('CARD_LUHN_SPARSE'));
+  });
+
+  it('keeps an unlabelled column of Luhn-valid cards likely', () => {
+    const cards = ['400000123456789', '400000987654321', '510000123456789', '520000987654321'].map(luhnBody);
+    const response = run('imports', [{ path: 'reference', samples: samples(cards) }]);
+    assert.equal(finding(response, 'reference', 'PAYMENT_CARD').status, 'likely');
+  });
+
+  it('keeps one card in free text likely', () => {
+    const notes = Array.from({ length: 20 }, () => 'Called about the renewal and left a voicemail.');
+    notes[7] = `Donor read their card over the phone ${luhnBody('400000123456789')} please run it.`;
+    const response = run('crm.notes', [{ path: 'notes', samples: samples(notes) }]);
+    assert.equal(finding(response, 'notes', 'PAYMENT_CARD').status, 'likely');
+  });
+
+  it('ignores email and name hints on numeric metric columns', () => {
+    const response = run('message_summary', [
+      { path: 'email_open_count', declaredType: 'decimal(65,0)', samples: samples(['12', '0', '3']) },
+      { path: 'email_delivered', declaredType: 'int', samples: samples([null, null]) },
+      { path: 'first_name_count', declaredType: 'bigint', samples: samples(['4']) },
+      { path: 'email', declaredType: 'varchar(255)', samples: samples([null, null]) }
+    ]);
+    assert.equal(finding(response, 'email_open_count', 'EMAIL'), undefined);
+    assert.equal(JSON.stringify(fieldResult(response, 'email_delivered')).includes('META_STRONG_EMAIL'), false);
+    assert.equal(finding(response, 'first_name_count', 'PERSON_NAME'), undefined);
+    assert.equal(JSON.stringify(fieldResult(response, 'email')).includes('META_STRONG_EMAIL'), true);
+  });
+
+  it('gives a strong hint only when the alias ends the name', () => {
+    const response = run('message', [
+      { path: 'email_open_count', declaredType: 'varchar(255)', samples: samples([null, null]) },
+      { path: 'email_type', declaredType: 'varchar(32)', samples: samples([null]) },
+      { path: 'email_domain', declaredType: 'varchar(180)', samples: samples([null]) },
+      { path: 'email_primary', declaredType: 'varchar(255)', samples: samples([null]) },
+      { path: 'phone_2', declaredType: 'varchar(32)', samples: samples([null]) },
+      { path: 'home_phone', declaredType: 'varchar(32)', samples: samples([null]) },
+      { path: 'email_sender', declaredType: 'varchar(255)', samples: samples(['ada@example.com']) }
+    ]);
+    const strong = (path) => JSON.stringify(fieldResult(response, path)).includes('META_STRONG_');
+    assert.equal(strong('email_open_count'), false);
+    assert.equal(strong('email_type'), false);
+    assert.equal(strong('email_domain'), false);
+    assert.equal(strong('email_primary'), true);
+    assert.equal(strong('phone_2'), true);
+    assert.equal(strong('home_phone'), true);
+    assert.equal(finding(response, 'email_sender', 'EMAIL').status, 'confirmed');
+  });
+
+  it('does not read fractional amounts as phones but keeps integer phones', () => {
+    const response = run('message_stats', [
+      {
+        path: 'attributed_avg_amount',
+        declaredType: 'decimal(19,8)',
+        samples: samples(['20.25551234', '41.55550134', '12.5'])
+      },
+      { path: 'contact_number', declaredType: 'bigint', samples: samples(['2028675309', '4155550134']) }
+    ]);
+    assert.equal(finding(response, 'attributed_avg_amount', 'PHONE_US'), undefined);
+    assert.ok(finding(response, 'contact_number', 'PHONE_US'));
+  });
+
+  it('keeps phone-shaped numeric ids possible unless the id names a person', () => {
+    const ids = ['2028675309', '4155550134', '3125550188'];
+    const response = run('advocacy_action', [
+      { path: 'p2a__external_campaign_id__c', declaredType: 'bigint', samples: samples(ids) },
+      { path: 'dlv_id', declaredType: 'int', samples: samples(ids) },
+      { path: 'remote_person_id', declaredType: 'bigint', samples: samples(ids) }
+    ]);
+    assert.equal(finding(response, 'p2a__external_campaign_id__c', 'PHONE_US').status, 'possible');
+    assert.equal(finding(response, 'dlv_id', 'PHONE_US').status, 'possible');
+    assert.equal(finding(response, 'remote_person_id', 'PHONE_US').status, 'likely');
+  });
+
+  it('treats one name on every row as a label', () => {
+    const response = run('tableau_cash_flow', [
+      { path: 'client_full_name', samples: samples(Array.from({ length: 50 }, () => 'Ada Lovelace')) },
+      { path: 'donor_full_name', samples: samples(['Ada Lovelace', 'Grace Hopper', 'Alan Turing']) }
+    ]);
+    assert.equal(finding(response, 'client_full_name', 'PERSON_NAME').status, 'possible');
+    assert.equal(finding(response, 'donor_full_name', 'PERSON_NAME').status, 'likely');
+  });
+
   it('does not treat last4 fields as a full card or SSN', () => {
     const response = run('billing', [
       { path: 'card_last4', samples: samples(['4242']) },

@@ -1,7 +1,7 @@
 import type { Hit, ResolvedOptions } from './contracts.ts';
 import type { PreparedField } from './canonicalise.ts';
 import type { FieldMeta } from './metadata.ts';
-import { weightFor } from './metadata.ts';
+import { isNumericDeclaredType, weightFor } from './metadata.ts';
 import type { Profile } from './profile.ts';
 import { emailHits } from './detectors/email.ts';
 import { phoneHits } from './detectors/phone-us.ts';
@@ -31,11 +31,14 @@ export function detectField(
   const postalMeta = weightFor(meta.hints, 'POSTAL_CODE');
   const idMeta = weightFor(meta.hints, 'PERSON_LINKED_ID');
   const freeText = profile.isFreeText;
+  const numeric = isNumericDeclaredType(field.declaredType);
 
   for (const cell of field.cells) {
     if (cell.kind !== 'usable') continue;
     const before = hits.length;
     const text = cell.text;
+    // A fraction in a numeric column is an amount or a rate; its digits are not a phone, card or postal code.
+    if (numeric && /^\s*-?\d*\.\d+\s*$/.test(text)) continue;
     push(hits, emailHits(field.path, cell.sampleId, text, room()));
     push(hits, ipHits(field.path, cell.sampleId, text, 'whole', room()));
     if (options.enableEmbeddedText) {
