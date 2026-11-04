@@ -30,8 +30,41 @@ export function parseCard(value: string): { digits: string; synthetic: boolean }
   const digits = trimmed.replace(/\D/g, '');
   if (digits.length < 13 || digits.length > 19) return null;
   if (/^(\d)\1+$/.test(digits)) return null;
+  if (!issuedRange(digits)) return null;
   if (!luhn(digits)) return null;
   return { digits, synthetic: TEST_PANS.has(digits) };
+}
+
+/** [first, last] prefix range of one length, and the card lengths issued in it. */
+const ISSUER_RANGES: Array<[number, number, readonly number[]]> = [
+  [4, 4, [13, 16, 19]], // Visa
+  [51, 55, [16]], // Mastercard
+  [2221, 2720, [16]], // Mastercard
+  [34, 34, [15]], // American Express
+  [37, 37, [15]],
+  [300, 305, [14, 15, 16, 17, 18, 19]], // Diners Club
+  [36, 36, [14, 15, 16, 17, 18, 19]],
+  [38, 39, [14, 15, 16, 17, 18, 19]],
+  [3528, 3589, [16, 17, 18, 19]], // JCB
+  [6011, 6011, [16, 17, 18, 19]], // Discover
+  [644, 649, [16, 17, 18, 19]],
+  [65, 65, [16, 17, 18, 19]],
+  [62, 62, [16, 17, 18, 19]], // UnionPay
+  [50, 50, [12, 13, 14, 15, 16, 17, 18, 19]], // Maestro
+  [56, 69, [12, 13, 14, 15, 16, 17, 18, 19]],
+  [2200, 2204, [16, 17, 18, 19]], // Mir
+  [60, 60, [16]], // RuPay
+  [81, 82, [16]],
+  [1, 1, [15]] // UATP
+];
+
+/** True when a network issues cards with this prefix and length; Luhn alone passes one id in ten. */
+export function issuedRange(digits: string): boolean {
+  return ISSUER_RANGES.some(([first, last, lengths]) => {
+    if (!lengths.includes(digits.length)) return false;
+    const prefix = Number(digits.slice(0, String(first).length));
+    return prefix >= first && prefix <= last;
+  });
 }
 
 export function luhn(digits: string): boolean {

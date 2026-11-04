@@ -110,6 +110,15 @@ describe('pii classifier', () => {
     assert.ok(card.reasons.includes('CARD_LUHN_SPARSE'));
   });
 
+  it('ignores Luhn-valid ids outside any card network range or length', () => {
+    const ids = ['81000012345678901', '8900001234567890', '810000123456789012', '9000001234567890', '4000001234567890123'.slice(0, 17)].map(
+      (id) => luhnBody(id.slice(0, -1))
+    );
+    for (const id of ids) assert.equal(luhn(id), true, id);
+    const response = run('transactions', [{ path: 'pay_processor_id', samples: samples(ids) }]);
+    assert.equal(finding(response, 'pay_processor_id', 'PAYMENT_CARD'), undefined);
+  });
+
   it('keeps an unlabelled column of Luhn-valid cards likely', () => {
     const cards = ['400000123456789', '400000987654321', '510000123456789', '520000987654321'].map(luhnBody);
     const response = run('imports', [{ path: 'reference', samples: samples(cards) }]);

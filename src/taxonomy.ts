@@ -1,5 +1,5 @@
 export const CLASSIFIER_VERSION = '1.0.0';
-export const RULES_VERSION = '2';
+export const RULES_VERSION = '3';
 
 export const LIMITS = {
   maxCharsPerValue: 4096,
