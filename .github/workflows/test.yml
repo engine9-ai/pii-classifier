@@ -1,0 +1,35 @@
+name: Test
+
+# dist/index.js is the built classifier that other packages import (Node will not strip TypeScript types inside
+# node_modules, and Workers need plain JavaScript). On main, a stale dist/ is rebuilt and committed here, so a
+# change made in the GitHub web editor never needs a command line. Then the tests run against both src/ and dist/.
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - run: npm install --no-audit --no-fund
+      - name: Rebuild dist/ if it is out of date (main only)
+        if: github.ref == 'refs/heads/main' && github.event_name != 'pull_request'
+        run: |
+          if ! node scripts/build.mjs --check; then
+            node scripts/build.mjs
+            git config user.name "github-actions[bot]"
+            git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+            git add dist/index.js
+            git commit -m "Rebuild dist/index.js"
+            git push
+          fi
+      - run: npm test

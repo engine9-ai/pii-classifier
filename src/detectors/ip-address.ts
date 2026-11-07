@@ -1,4 +1,3 @@
-import { isIP } from 'node:net';
 import type { Hit } from '../contracts.ts';
 
 export function ipHits(path: string, sampleId: string, text: string, mode: 'whole' | 'embedded', limit: number): Hit[] {
@@ -39,4 +38,50 @@ function make(path: string, sampleId: string, ip: string, start: number, end: nu
     synthetic: false,
     reasons: ['IP_SYNTAX_VALID']
   };
+}
+
+/**
+ * 4 or 6 when the value is an IPv4 or IPv6 address, else 0 (the node:net contract, without node:net,
+ * so the classifier runs in Workers and browsers too).
+ */
+export function isIP(value: string): 0 | 4 | 6 {
+  if (isIPv4(value)) return 4;
+  if (isIPv6(value)) return 6;
+  return 0;
+}
+
+function isIPv4(value: string): boolean {
+  const parts = value.split('.');
+  if (parts.length !== 4) return false;
+  return parts.every((part) => /^(?:0|[1-9]\d{0,2})$/.test(part) && Number(part) <= 255);
+}
+
+function isIPv6(value: string): boolean {
+  let text = value;
+  const zone = text.indexOf('%');
+  if (zone >= 0) {
+    if (!/^[A-Za-z0-9._~-]+$/.test(text.slice(zone + 1))) return false;
+    text = text.slice(0, zone);
+  }
+  if (!text.includes(':')) return false;
+  let groups = 8;
+  const lastColon = text.lastIndexOf(':');
+  const tail = text.slice(lastColon + 1);
+  if (tail.includes('.')) {
+    if (!isIPv4(tail)) return false;
+    text = text.slice(0, lastColon + 1) + '0:0';
+  }
+  const double = text.indexOf('::');
+  if (double !== text.lastIndexOf('::')) return false;
+  const hex = /^[0-9A-Fa-f]{1,4}$/;
+  if (double >= 0) {
+    const head = text.slice(0, double);
+    const rest = text.slice(double + 2);
+    const a = head ? head.split(':') : [];
+    const b = rest ? rest.split(':') : [];
+    if (![...a, ...b].every((g) => hex.test(g))) return false;
+    return a.length + b.length < groups;
+  }
+  const all = text.split(':');
+  return all.length === groups && all.every((g) => hex.test(g));
 }

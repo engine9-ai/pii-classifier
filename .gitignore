@@ -80,7 +80,7 @@ out
 
 # Nuxt.js build / generate output
 .nuxt
-dist
+# dist/ is committed (scripts/build.mjs)
 .output
 
 # Gatsby files
