@@ -784,7 +784,7 @@ function ipHits(path, sampleId, text, mode, limit) {
   const v4 = /\b(?:\d{1,3}\.){3}\d{1,3}\b/g;
   let match;
   while (hits.length < limit && (match = v4.exec(text))) {
-    if (isIP(match[0])) hits.push(make5(path, sampleId, match[0], match.index, match.index + match[0].length));
+    if (isIP(match[0]) && !isPartOfLongerDottedToken(text, match.index, match.index + match[0].length)) hits.push(make5(path, sampleId, match[0], match.index, match.index + match[0].length));
     if (match.index === v4.lastIndex) v4.lastIndex += 1;
   }
   const v6 = /\b(?:[A-F0-9]{0,4}:){2,7}[A-F0-9]{0,4}\b/gi;
@@ -796,6 +796,12 @@ function ipHits(path, sampleId, text, mode, limit) {
     if (match.index === v6.lastIndex) v6.lastIndex += 1;
   }
   return hits;
+}
+function isPartOfLongerDottedToken(text, start, end) {
+  if (/^\.[0-9A-Za-z]/.test(text.slice(end, end + 2))) return true;
+  const before = text.slice(Math.max(0, start - 2), start);
+  if (/\d\.$/.test(before)) return true;
+  return /[-_]$/.test(before);
 }
 function make5(path, sampleId, ip, start, end) {
   return {

@@ -54,6 +54,19 @@ describe('free text', () => {
     assert.match(r.text, /200 \[IP_ADDRESS\]\r\n/);
   });
 
+  it('ignores dotted digits in URLs, analytics ids and version strings, but keeps real IPs', () => {
+    const noise = [
+      'https://example.org/?guci=1.2.0.0.2.2.0.0&x=1',
+      'https://example.org/?_ga=2.266443662.107568383.1597066074-473745148.1597066074',
+      'https://mail.example.com/mail-1.89.263.11226/client/dereferrer',
+      'build_1.87.246.2 released',
+      'http://m.facebook.com/'
+    ];
+    for (const text of noise) assert.equal(redactText(text, { style: 'label' }).redacted.IP_ADDRESS || 0, 0, text);
+    const real = ['ip=1.2.3.4', 'from 74.125.79.132.', '74.125.79.132:8080', '[10.0.0.1]', 'http://203.0.113.9/path'];
+    for (const text of real) assert.equal(redactText(text, { style: 'label' }).redacted.IP_ADDRESS, 1, text);
+  });
+
   it('drops text past maxChars instead of keeping it unscanned', () => {
     const r = redactText('a'.repeat(50) + ' x@y.com', { maxChars: 40 });
     assert.equal(r.truncated, true);

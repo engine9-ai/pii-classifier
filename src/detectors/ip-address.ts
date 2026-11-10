@@ -10,7 +10,7 @@ export function ipHits(path: string, sampleId: string, text: string, mode: 'whol
   const v4 = /\b(?:\d{1,3}\.){3}\d{1,3}\b/g;
   let match: RegExpExecArray | null;
   while (hits.length < limit && (match = v4.exec(text))) {
-    if (isIP(match[0])) hits.push(make(path, sampleId, match[0], match.index, match.index + match[0].length));
+    if (isIP(match[0]) && !isPartOfLongerDottedToken(text, match.index, match.index + match[0].length)) hits.push(make(path, sampleId, match[0], match.index, match.index + match[0].length));
     if (match.index === v4.lastIndex) v4.lastIndex += 1;
   }
   const v6 = /\b(?:[A-F0-9]{0,4}:){2,7}[A-F0-9]{0,4}\b/gi;
@@ -22,6 +22,19 @@ export function ipHits(path: string, sampleId: string, text: string, mode: 'whol
     if (match.index === v6.lastIndex) v6.lastIndex += 1;
   }
   return hits;
+}
+
+/**
+ * Four dotted numbers inside free text are often not an address: analytics ids (`guci=1.2.0.0.2.2.0.0`),
+ * version strings (`/mail-1.89.263.11226/client`), or a tail of a longer dotted run. Reject a candidate that
+ * continues into more dotted digits or letters, or that sits directly after `digit.`, `-` or `_`.
+ * `ip=1.2.3.4`, `1.2.3.4:8080`, `[1.2.3.4]`, `http://1.2.3.4/` and a sentence-ending `1.2.3.4.` still match.
+ */
+function isPartOfLongerDottedToken(text: string, start: number, end: number): boolean {
+  if (/^\.[0-9A-Za-z]/.test(text.slice(end, end + 2))) return true;
+  const before = text.slice(Math.max(0, start - 2), start);
+  if (/\d\.$/.test(before)) return true;
+  return /[-_]$/.test(before);
 }
 
 function make(path: string, sampleId: string, ip: string, start: number, end: number): Hit {
